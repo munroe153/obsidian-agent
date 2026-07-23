@@ -27,7 +27,8 @@ export class AgentSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "Agent Tools settings" });
+
+    new Setting(containerEl).setName("Agent tools settings").setHeading();
 
     new Setting(containerEl)
       .setName("Base URL")
@@ -81,7 +82,6 @@ export class AgentSettingTab extends PluginSettingTab {
         const valueEl = containerEl.createSpan({ cls: "agent-slider-value", text: String(this.plugin.settings.maxIterations) });
         s.setLimits(1, 30, 1)
           .setValue(this.plugin.settings.maxIterations)
-          .setDynamicTooltip()
           .onChange(async (v) => {
             this.plugin.settings.maxIterations = v;
             valueEl.setText(String(v));
