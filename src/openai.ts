@@ -87,3 +87,29 @@ export async function chatCompletion(opts: ChatCompletionOptions): Promise<ChatC
     usage: data.usage,
   };
 }
+
+/**
+ * Fetch available model ids from an OpenAI-compatible `/models` endpoint.
+ * Returns a sorted list; empty array on any failure (offline, auth, no endpoint).
+ */
+export async function listModels(baseUrl: string, apiKey: string): Promise<string[]> {
+  try {
+    const url = baseUrl.replace(/\/+$/, "") + "/models";
+    const res = await requestUrl({
+      url,
+      method: "GET",
+      headers: { Authorization: `Bearer ${apiKey}` },
+      throw: false,
+    });
+    if (res.status >= 400) return [];
+    const data = res.json;
+    if (!data || !Array.isArray(data.data)) return [];
+    const ids: string[] = [];
+    for (const entry of data.data) {
+      if (entry && typeof entry.id === "string" && entry.id.length > 0) ids.push(entry.id);
+    }
+    return ids.sort();
+  } catch {
+    return [];
+  }
+}

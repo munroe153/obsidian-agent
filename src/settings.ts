@@ -1,4 +1,5 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, Notice, PluginSettingTab, Setting } from "obsidian";
+import { listModels } from "./openai";
 import type AgentPlugin from "./main";
 
 export interface AgentSettings {
@@ -26,8 +27,75 @@ export const DEFAULT_SETTINGS: AgentSettings = {
 };
 
 export class AgentSettingTab extends PluginSettingTab {
+  private fetchedModels: string[] = [];
+  private modelManual = false;
+  private autoFetched = false;
+
   constructor(app: App, private plugin: AgentPlugin) {
     super(app, plugin);
+  }
+
+  /** Model picker: dropdown populated from the endpoint's /models, with a
+   * refresh button and a manual-input fallback (openagent-style). */
+  private renderModelSetting(containerEl: HTMLElement): void {
+    const current = this.plugin.settings.model;
+    const setting = new Setting(containerEl)
+      .setName("Model")
+      .setDesc("Pick a model from the endpoint (refresh to fetch the list), or type one manually.");
+
+    if (this.modelManual) {
+      setting.addText((t) =>
+        t.setPlaceholder("e.g. gpt-4o-mini, deepseek-chat")
+          .setValue(current)
+          .onChange(async (v) => {
+            this.plugin.settings.model = v.trim();
+            await this.plugin.saveSettings();
+          })
+      );
+    } else {
+      setting.addDropdown((d) => {
+        const options = this.fetchedModels.includes(current)
+          ? this.fetchedModels
+          : [current, ...this.fetchedModels];
+        for (const m of options) d.addOption(m, m || "(not set)");
+        d.setValue(current).onChange(async (v) => {
+          this.plugin.settings.model = v;
+          await this.plugin.saveSettings();
+        });
+      });
+    }
+
+    setting.addExtraButton((b) =>
+      b.setIcon("rotate-cw")
+        .setTooltip("Fetch model list from the endpoint")
+        .onClick(async () => {
+          const { baseUrl, apiKey } = this.plugin.settings;
+          if (!baseUrl) {
+            new Notice("Agent: set the Base URL first.");
+            return;
+          }
+          new Notice("Agent: fetching model list…");
+          const models = await listModels(baseUrl, apiKey);
+          if (models.length === 0) {
+            new Notice("Agent: no models returned (check Base URL / API key) — switched to manual input.");
+            this.modelManual = true;
+          } else {
+            new Notice(`Agent: found ${models.length} model(s).`);
+            this.fetchedModels = models;
+            this.modelManual = false;
+          }
+          this.display();
+        })
+    );
+
+    setting.addExtraButton((b) =>
+      b.setIcon(this.modelManual ? "list" : "pencil")
+        .setTooltip(this.modelManual ? "Switch to dropdown" : "Switch to manual input")
+        .onClick(() => {
+          this.modelManual = !this.modelManual;
+          this.display();
+        })
+    );
   }
 
   display(): void {
@@ -55,15 +123,7 @@ export class AgentSettingTab extends PluginSettingTab {
         });
       });
 
-    new Setting(containerEl)
-      .setName("Model")
-      .setDesc("Model name, e.g. gpt-4o-mini, deepseek-chat, moonshot-v1-8k")
-      .addText((t) =>
-        t.setValue(this.plugin.settings.model).onChange(async (v) => {
-          this.plugin.settings.model = v.trim();
-          await this.plugin.saveSettings();
-        })
-      );
+    this.renderModelSetting(containerEl);
 
     new Setting(containerEl)
       .setName("Chat open mode")
@@ -142,5 +202,16 @@ export class AgentSettingTab extends PluginSettingTab {
         s.sliderEl.addClass("agent-slider");
       });
     linesSetting.setDisabled(!this.plugin.settings.truncateEnabled);
+
+    // Auto-fetch the model list once when the tab opens (if possible).
+    if (!this.autoFetched && this.fetchedModels.length === 0 && this.plugin.settings.baseUrl) {
+      this.autoFetched = true;
+      void listModels(this.plugin.settings.baseUrl, this.plugin.settings.apiKey).then((models) => {
+        if (models.length > 0 && !this.modelManual) {
+          this.fetchedModels = models;
+          this.display();
+        }
+      });
+    }
   }
 }
