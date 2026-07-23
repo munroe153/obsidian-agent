@@ -89,6 +89,20 @@ function tool(
 
 const str = (description: string): JsonSchema => ({ type: "string", description });
 
+/** Minimal structural typing for the (undocumented) commands API. */
+interface CommandEntry {
+  id: string;
+  name: string;
+}
+interface CommandsApi {
+  commands?: Record<string, CommandEntry>;
+  executeCommandById?: (id: string) => boolean;
+}
+
+function getCommandsApi(app: App): CommandsApi | undefined {
+  return (app as unknown as { commands?: CommandsApi }).commands;
+}
+
 /** Build the full Obsidian-API toolset for the current app instance. */
 export function buildObsidianTools(app: App): Tool[] {
   const vault = app.vault;
@@ -242,7 +256,7 @@ export function buildObsidianTools(app: App): Tool[] {
       async ({ path }) => {
         try {
           const f = mustGetFile(String(path));
-          await vault.trash(f, true);
+          await app.fileManager.trashFile(f);
           return ok(`Deleted ${f.path}`);
         } catch (e) { return err((e as Error).message); }
       }
@@ -334,10 +348,9 @@ export function buildObsidianTools(app: App): Tool[] {
       ["command_id"],
       async ({ command_id }) => {
         const id = String(command_id);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const commands = (app as any).commands;
+        const commands = getCommandsApi(app);
         if (!commands?.commands?.[id]) return err(`Unknown command: ${id}`);
-        const okExec = commands.executeCommandById(id);
+        const okExec = commands.executeCommandById ? commands.executeCommandById(id) : false;
         return okExec ? ok(`Executed ${id}`) : err(`Command could not run in current context: ${id}`);
       }
     ),
@@ -348,12 +361,10 @@ export function buildObsidianTools(app: App): Tool[] {
       { filter: str("Optional substring filter on id/name") },
       [],
       async ({ filter }) => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const commands = (app as any).commands?.commands ?? {};
+        const commands = getCommandsApi(app)?.commands ?? {};
         const f = filter ? String(filter).toLowerCase() : "";
         const list = Object.values(commands)
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          .map((c: any) => ({ id: c.id, name: c.name }))
+          .map((c) => ({ id: c.id, name: c.name }))
           .filter((c) => !f || c.id.toLowerCase().includes(f) || c.name.toLowerCase().includes(f));
         return ok(list.slice(0, 100));
       }
