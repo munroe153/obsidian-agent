@@ -29,7 +29,7 @@ An AI agent for your vault. Chat with it in a sidebar or a dedicated tab, and it
 2. Open the chat panel:
    - Click the robot ribbon icon (opens according to the **Chat open mode** setting), or
    - Run the command **Open chat in sidebar** / **Open chat in a new tab** from the command palette.
-3. Type your request and press Enter. Tool calls and their results are shown inline in the chat.
+3. Type your request and press Enter. Type `@` to fuzzy-match and reference vault notes — referenced files' contents are attached automatically. Tool calls and their results are shown inline in the chat.
 4. Try things like:
    - "List all notes in the vault root and summarize my note structure"
    - "Find every note mentioning 'deadline' and compile a TODO table into `Tasks.md`"
@@ -38,6 +38,8 @@ An AI agent for your vault. Chat with it in a sidebar or a dedicated tab, and it
 ### Settings
 
 - **Chat open mode**: where the ribbon icon opens the chat (sidebar or tab).
+- **Require confirmation**: ask before any vault-modifying tool runs (with diff preview for overwrite/replace).
+- **Truncate long files** + **Max lines per read**: manual switch and line threshold for how much file content is uploaded per tool call.
 - **Max tool iterations**: safety cap on tool-call rounds per message (1–30).
 - **Unlimited mode (超限模式)**: removes the cap; the agent keeps calling tools until the model stops on its own.
 

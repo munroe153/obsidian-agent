@@ -51,7 +51,10 @@ export class ObsidianAgent {
     private settings: AgentSettings,
     private consent?: ConsentManager
   ) {
-    this.tools = buildObsidianTools(app);
+    this.tools = buildObsidianTools(app, () => ({
+      enabled: this.settings.truncateEnabled !== false,
+      maxLines: this.settings.truncateMaxLines > 0 ? this.settings.truncateMaxLines : 200,
+    }));
     this.toolMap = new Map(this.tools.map((t) => [t.definition.function.name, t]));
   }
 

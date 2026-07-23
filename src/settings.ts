@@ -9,6 +9,8 @@ export interface AgentSettings {
   unlimitedIterations: boolean;
   openMode: "sidebar" | "tab";
   requireConsent: boolean;
+  truncateEnabled: boolean;
+  truncateMaxLines: number;
 }
 
 export const DEFAULT_SETTINGS: AgentSettings = {
@@ -19,6 +21,8 @@ export const DEFAULT_SETTINGS: AgentSettings = {
   unlimitedIterations: false,
   openMode: "sidebar",
   requireConsent: true,
+  truncateEnabled: true,
+  truncateMaxLines: 200,
 };
 
 export class AgentSettingTab extends PluginSettingTab {
@@ -111,5 +115,32 @@ export class AgentSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         })
       );
+
+    new Setting(containerEl)
+      .setName("Truncate long files")
+      .setDesc("Limit how much of a file the agent uploads in one tool call. Turn off to always send full content (may exceed context or cost more tokens).")
+      .addToggle((tg) =>
+        tg.setValue(this.plugin.settings.truncateEnabled).onChange(async (v) => {
+          this.plugin.settings.truncateEnabled = v;
+          linesSetting.setDisabled(!v);
+          await this.plugin.saveSettings();
+        })
+      );
+
+    const linesSetting = new Setting(containerEl)
+      .setName("Max lines per read")
+      .setDesc("Line threshold for truncation: tools return at most this many lines per call (10–2000).")
+      .addSlider((s) => {
+        const valueEl = containerEl.createSpan({ cls: "agent-slider-value", text: String(this.plugin.settings.truncateMaxLines) });
+        s.setLimits(10, 2000, 10)
+          .setValue(this.plugin.settings.truncateMaxLines)
+          .onChange(async (v) => {
+            this.plugin.settings.truncateMaxLines = v;
+            valueEl.setText(String(v));
+            await this.plugin.saveSettings();
+          });
+        s.sliderEl.addClass("agent-slider");
+      });
+    linesSetting.setDisabled(!this.plugin.settings.truncateEnabled);
   }
 }

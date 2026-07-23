@@ -41,23 +41,49 @@ function coerceYamlValue(v: unknown): unknown {
   try { return JSON.parse(s); } catch { return v; }
 }
 
-/** Max characters of file content returned to the model in one tool call.
- * Longer content is truncated BEFORE it ever reaches the LLM payload. */
-export const MAX_CONTENT_CHARS = 8000;
+/** Truncation behavior for tool results, driven by user settings. */
+export interface TruncateConfig {
+  enabled: boolean;
+  maxLines: number;
+}
 
-function truncateForModel(content: string, offset = 0, limit = MAX_CONTENT_CHARS) {
-  const start = Math.max(0, offset);
-  const slice = content.slice(start, start + Math.min(limit, MAX_CONTENT_CHARS));
+export const DEFAULT_TRUNCATE: TruncateConfig = { enabled: true, maxLines: 200 };
+
+/**
+ * Line-based truncation applied BEFORE content ever reaches the LLM payload.
+ * offset/limit are line numbers. When disabled, full content is returned.
+ */
+function truncateForModel(content: string, cfg: TruncateConfig, offset = 0, limit?: number) {
+  if (!cfg.enabled) {
+    return {
+      content,
+      offset: 0,
+      returned_lines: content.split("\n").length,
+      total_lines: content.split("\n").length,
+      truncated: false,
+    };
+  }
+  const lines = content.split("\n");
+  const start = Math.max(0, Math.floor(offset));
+  const cap = Math.max(1, cfg.maxLines);
+  const take = Math.min(Math.max(1, Math.floor(limit ?? cap)), cap);
+  const slice = lines.slice(start, start + take);
+  const truncated = start + slice.length < lines.length;
   return {
-    content: slice,
+    content: slice.join("\n"),
     offset: start,
-    returned_chars: slice.length,
-    total_chars: content.length,
-    truncated: start + slice.length < content.length,
-    hint: start + slice.length < content.length
-      ? "Content was truncated before upload. Call again with a larger offset to keep reading."
+    returned_lines: slice.length,
+    total_lines: lines.length,
+    truncated,
+    hint: truncated
+      ? `Content truncated before upload (showing lines ${start + 1}-${start + slice.length} of ${lines.length}). Call again with a larger offset to keep reading.`
       : undefined,
   };
+}
+
+/** Truncate arbitrary text for the model (used by chat @-file references). */
+export function truncateText(content: string, cfg: TruncateConfig): string {
+  return truncateForModel(content, cfg).content;
 }
 
 export interface Tool {
@@ -125,7 +151,10 @@ function getCommandsApi(app: App): CommandsApi | undefined {
 }
 
 /** Build the full Obsidian-API toolset for the current app instance. */
-export function buildObsidianTools(app: App): Tool[] {
+export function buildObsidianTools(
+  app: App,
+  getTruncate: () => TruncateConfig = () => DEFAULT_TRUNCATE
+): Tool[] {
   const vault = app.vault;
 
   const ok = (data: unknown) => ({ ok: true, data });
@@ -141,18 +170,18 @@ export function buildObsidianTools(app: App): Tool[] {
     // ---------- Vault read ----------
     tool(
       "read_note",
-      "Read the markdown content of a note. Long files are truncated to 8000 chars before upload; use offset/limit to page through them.",
+      "Read the markdown content of a note. Long files are truncated to a configurable number of lines before upload; use offset/limit (in lines) to page through them.",
       {
         path: str("Vault-relative path, e.g. 'Folder/Note.md'"),
-        offset: { type: "number", description: "Character offset to start reading from (default 0)" },
-        limit: { type: "number", description: "Max characters to return (default 8000, hard cap 8000)" },
+        offset: { type: "number", description: "Line number to start reading from, 0-based (default 0)" },
+        limit: { type: "number", description: "Max lines to return (default and hard cap: the user's truncation setting)" },
       },
       ["path"],
       async ({ path, offset, limit }) => {
         try {
           const f = mustGetFile(String(path));
           const content = await vault.read(f);
-          return ok(truncateForModel(content, Number(offset) || 0, Number(limit) || MAX_CONTENT_CHARS));
+          return ok(truncateForModel(content, getTruncate(), Number(offset) || 0, limit === undefined ? undefined : Number(limit)));
         } catch (e) { return err((e as Error).message); }
       }
     ),
@@ -431,7 +460,7 @@ export function buildObsidianTools(app: App): Tool[] {
       ["name"],
       async ({ name }) => {
         try {
-          return ok(truncateForModel(await readSkill(app, String(name))));
+          return ok(truncateForModel(await readSkill(app, String(name)), getTruncate()));
         } catch (e) { return err((e as Error).message); }
       }
     ),
@@ -450,7 +479,7 @@ export function buildObsidianTools(app: App): Tool[] {
         return ok({
           path: view.file?.path ?? null,
           selection: "",
-          editor_text: truncateForModel(view.editor.getValue()),
+          editor_text: truncateForModel(view.editor.getValue(), getTruncate()),
           hint: "Nothing selected; editor_text contains the (possibly truncated) current buffer.",
         });
       }

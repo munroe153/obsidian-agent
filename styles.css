@@ -139,3 +139,37 @@
   margin-top: 12px;
   flex-wrap: wrap;
 }
+
+/* @ file-reference suggestions */
+.agent-chat-input-row {
+  position: relative;
+}
+
+.agent-suggest {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  z-index: 10;
+}
+
+.agent-suggest-item {
+  padding: 6px 10px;
+  font-size: var(--font-ui-small);
+  font-family: var(--font-monospace);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-suggest-item.is-active,
+.agent-suggest-item:hover {
+  background: var(--background-modifier-hover);
+}
