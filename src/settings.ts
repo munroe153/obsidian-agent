@@ -28,8 +28,6 @@ export class AgentSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    new Setting(containerEl).setName("Agent tools settings").setHeading();
-
     new Setting(containerEl)
       .setName("Base URL")
       .setDesc("OpenAI-compatible API base, e.g. https://api.openai.com/v1 or http://localhost:11434/v1 (Ollama)")
