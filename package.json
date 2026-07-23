@@ -1,6 +1,6 @@
 {
   "name": "obsidian-agent",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Agent plugin: 27 LLM tools over the vault API, OpenAI-compatible, desktop and mobile.",
   "main": "main.js",
   "scripts": {
