@@ -173,3 +173,20 @@
 .agent-suggest-item:hover {
   background: var(--background-modifier-hover);
 }
+
+/* Thinking bubble (model reasoning) */
+.agent-msg-thinking {
+  align-self: flex-start;
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: var(--font-ui-smaller);
+  max-width: 95%;
+  border-left: 2px solid var(--background-modifier-border);
+}
+
+/* Session picker */
+.agent-chat-sessions {
+  max-width: 45%;
+  height: 26px;
+  font-size: var(--font-ui-smaller);
+}

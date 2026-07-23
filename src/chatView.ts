@@ -1,6 +1,7 @@
 import { ItemView, Notice, TFile, WorkspaceLeaf, setIcon } from "obsidian";
 import { ObsidianAgent } from "./agent";
 import { truncateText } from "./tools";
+import { SessionStore } from "./sessions";
 import type { ChatMessage } from "./openai";
 import type AgentPlugin from "./main";
 
@@ -24,9 +25,15 @@ export class AgentChatView extends ItemView {
   private suggestIdx = 0;
   private suggestFrom = -1; // caret index of the active '@'
 
+  // Session persistence
+  private store: SessionStore;
+  private sessionId?: string;
+  private sessionSelect?: HTMLSelectElement;
+
   constructor(leaf: WorkspaceLeaf, private plugin: AgentPlugin) {
     super(leaf);
     this.agent = new ObsidianAgent(this.app, plugin.settings, plugin.consent, plugin.undo);
+    this.store = new SessionStore(this.app);
   }
 
   getViewType(): string { return VIEW_TYPE_AGENT_CHAT; }
@@ -38,8 +45,13 @@ export class AgentChatView extends ItemView {
     root.empty();
     root.addClass("agent-chat-root");
 
-    // Header: context usage (left) + refresh action (right).
+    // Header: session picker + context usage (left) + refresh action (right).
     const header = root.createDiv({ cls: "agent-chat-header" });
+    this.sessionSelect = header.createEl("select", { cls: "agent-chat-sessions" });
+    this.sessionSelect.addEventListener("change", () => {
+      const id = this.sessionSelect?.value;
+      if (id && id !== this.sessionId) this.loadSession(id);
+    });
     this.usageEl = header.createSpan({ cls: "agent-chat-usage", text: "context ≈ 0 tok" });
     const refreshBtn = header.createEl("button", {
       cls: "agent-chat-refresh",
@@ -104,6 +116,61 @@ export class AgentChatView extends ItemView {
     });
 
     this.updateUsage();
+
+    // Restore the most recent session.
+    await this.store.load();
+    this.refreshSessionPicker();
+    const recent = this.store.list()[0];
+    if (recent && recent.messages.length > 0) {
+      this.sessionId = recent.id;
+      this.history = recent.messages;
+      this.renderHistory();
+      this.refreshSessionPicker();
+      this.updateUsage();
+    }
+  }
+
+  /** Rebuild the session dropdown from the store. */
+  private refreshSessionPicker(): void {
+    const sel = this.sessionSelect;
+    if (!sel) return;
+    sel.empty();
+    const currentOpt = sel.createEl("option", {
+      text: this.sessionId ? this.store.get(this.sessionId)?.title ?? "current chat" : "(new chat)",
+      value: this.sessionId ?? "",
+    });
+    currentOpt.selected = true;
+    for (const s of this.store.list()) {
+      if (s.id === this.sessionId) continue;
+      sel.createEl("option", { text: s.title, value: s.id });
+    }
+  }
+
+  private loadSession(id: string): void {
+    if (this.busy) return;
+    const s = this.store.get(id);
+    if (!s) return;
+    this.sessionId = s.id;
+    this.history = s.messages;
+    this.renderHistory();
+    this.updateUsage();
+  }
+
+  /** Re-render bubbles from a loaded history. */
+  private renderHistory(): void {
+    this.messagesEl.empty();
+    for (const m of this.history) {
+      if (m.role === "user" && m.content) {
+        // Strip the injected referenced-files block for display.
+        const display = m.content.split("\n\n<referenced-files>")[0];
+        this.addBubble("agent-msg-user", display);
+      } else if (m.role === "assistant" && m.content) {
+        this.addBubble("agent-msg-assistant", m.content);
+      } else if (m.role === "tool") {
+        const short = m.content && m.content.length > 200 ? m.content.slice(0, 200) + "…" : m.content ?? "";
+        this.addBubble("agent-msg-tool-result", `↳ ${m.name}: ${short}`);
+      }
+    }
   }
 
   /** Rough token estimate of the context window: chars / 4 (incl. system prompt allowance). */
@@ -123,6 +190,8 @@ export class AgentChatView extends ItemView {
   private resetConversation(): void {
     if (this.busy) return;
     this.history = [];
+    this.sessionId = undefined;
+    this.refreshSessionPicker();
     this.messagesEl.empty();
     this.addBubble("agent-msg-assistant", "Context cleared. New conversation started.");
     this.updateUsage();
@@ -242,6 +311,9 @@ export class AgentChatView extends ItemView {
         if (e.type === "assistant") {
           lastAssistant = e.content;
           thinking.firstElementChild?.setText(e.content);
+        } else if (e.type === "thinking") {
+          const short = e.content.length > 500 ? e.content.slice(0, 500) + "…" : e.content;
+          this.addBubble("agent-msg-thinking", `🧠 ${short}`);
         } else if (e.type === "tool_call") {
           this.addBubble("agent-msg-tool", `⚙ ${e.name}(${e.content})`);
         } else if (e.type === "tool_result") {
@@ -251,6 +323,9 @@ export class AgentChatView extends ItemView {
       });
       if (!lastAssistant) thinking.firstElementChild?.setText("(no text answer)");
       this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+      // Persist the conversation.
+      this.sessionId = await this.store.save(this.history, this.sessionId);
+      this.refreshSessionPicker();
     } catch (e) {
       thinking.firstElementChild?.setText(`Error: ${(e as Error).message}`);
       new Notice(`Agent error: ${(e as Error).message}`);

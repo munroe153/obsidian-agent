@@ -37,7 +37,53 @@ export interface ChatCompletionOptions {
 export interface ChatCompletionResult {
   message: ChatMessage;
   finishReason: string;
+  /** Model reasoning (DeepSeek-R1 reasoning_content or <think> block), if any. */
+  thinking?: string;
   usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+}
+
+/** Classified errors so the UI can tell users what actually went wrong. */
+export class AuthError extends Error {}
+export class RateLimitError extends Error {}
+export class NetworkError extends Error {}
+export class ProviderError extends Error {}
+
+// EOS tokens some local/open-source models leak into their output.
+const EOS_TOKENS = ["<|endoftext|>", "<|eot_id|>", "<|im_end|>", "<eos>", "</s>"];
+
+function stripEosTokens(text: string): string {
+  let result = text;
+  for (const token of EOS_TOKENS) result = result.split(token).join("");
+  return result.trim();
+}
+
+/** Split reasoning out of a completion: prefer reasoning_content, else a leading <think> block. */
+export function extractThinking(
+  reasoningContent: unknown,
+  rawText: string
+): { text: string; thinking: string } {
+  if (typeof reasoningContent === "string" && reasoningContent.trim().length > 0) {
+    return { text: stripEosTokens(rawText), thinking: reasoningContent.trim() };
+  }
+  const m = rawText.match(/^<think>([\s\S]*?)<\/think>\s*/);
+  if (m) {
+    return { text: stripEosTokens(rawText.slice(m[0].length)), thinking: m[1].trim() };
+  }
+  return { text: stripEosTokens(rawText), thinking: "" };
+}
+
+function mapHttpError(status: number, detail: string): Error {
+  const short = detail.slice(0, 200);
+  if (status === 401 || status === 403) {
+    return new AuthError(`Authentication failed (HTTP ${status}). Check your API key in settings.`);
+  }
+  if (status === 429) {
+    return new RateLimitError("Rate limited (HTTP 429). Slow down or check your provider quota.");
+  }
+  if (status === 404) {
+    return new ProviderError(`HTTP 404: endpoint not found — check the Base URL. ${short}`);
+  }
+  return new ProviderError(`LLM API error ${status}: ${short}`);
 }
 
 /**
@@ -56,34 +102,43 @@ export async function chatCompletion(opts: ChatCompletionOptions): Promise<ChatC
     body.tool_choice = "auto";
   }
 
-  const res = await requestUrl({
-    url,
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${opts.apiKey}`,
-    },
-    body: JSON.stringify(body),
-    throw: false,
-  });
+  let res;
+  try {
+    res = await requestUrl({
+      url,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${opts.apiKey}`,
+      },
+      body: JSON.stringify(body),
+      throw: false,
+    });
+  } catch (e) {
+    throw new NetworkError(`Network error talking to ${url}: ${(e as Error).message}`);
+  }
 
   if (res.status >= 400) {
     let detail = "";
     try { detail = JSON.stringify(res.json); } catch { detail = res.text?.slice(0, 500) ?? ""; }
-    throw new Error(`LLM API error ${res.status}: ${detail}`);
+    throw mapHttpError(res.status, detail);
   }
 
   const data = res.json;
   const choice = data.choices?.[0];
-  if (!choice) throw new Error("LLM API returned no choices");
+  if (!choice) throw new ProviderError("LLM API returned no choices");
+
+  const rawContent = typeof choice.message.content === "string" ? choice.message.content : "";
+  const { text, thinking } = extractThinking(choice.message.reasoning_content, rawContent);
 
   return {
     message: {
       role: "assistant",
-      content: choice.message.content ?? null,
+      content: text.length > 0 ? text : null,
       tool_calls: choice.message.tool_calls,
     },
     finishReason: choice.finish_reason ?? "stop",
+    thinking: thinking.length > 0 ? thinking : undefined,
     usage: data.usage,
   };
 }

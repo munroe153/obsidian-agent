@@ -5,12 +5,13 @@ import { App } from "obsidian";
 import { chatCompletion, ChatMessage } from "./openai";
 import { buildObsidianTools, Tool } from "./tools";
 import { ensureAgentWorkspace, loadMemory, listSkills } from "./memory";
+import { validateArgs } from "./validate";
 import type { ConsentManager } from "./consent";
 import type { UndoManager } from "./undo";
 import type { AgentSettings } from "./settings";
 
 export interface AgentEvent {
-  type: "tool_call" | "tool_result" | "assistant" | "error";
+  type: "tool_call" | "tool_result" | "assistant" | "thinking" | "error";
   name?: string;
   content: string;
 }
@@ -122,6 +123,10 @@ export class ObsidianAgent {
       const msg = result.message;
       messages.push(msg);
 
+      if (result.thinking) {
+        onEvent({ type: "thinking", content: result.thinking });
+      }
+
       if (msg.content) {
         onEvent({ type: "assistant", content: msg.content });
       }
@@ -149,11 +154,15 @@ export class ObsidianAgent {
 
         const tool = this.toolMap.get(name);
         let output: unknown;
+        const argCheck = tool ? validateArgs(args, tool.definition.function.parameters) : null;
         if (parseError) {
           // Feed the failure back so the model can retry with valid JSON.
           output = { ok: false, error: `Invalid JSON arguments: ${parseError}` };
         } else if (!tool) {
           output = { ok: false, error: `Unknown tool: ${name}` };
+        } else if (argCheck && !argCheck.ok) {
+          // Schema-level argument errors go back to the model so it can fix them.
+          output = { ok: false, error: `ToolArgError: ${argCheck.error}` };
         } else if (tool.mutates && this.consent && !(await this.consent.confirm(tool, args))) {
           output = { ok: false, error: "ConsentDenied: the user rejected this action. Do not retry it; ask the user how to proceed." };
         } else {
