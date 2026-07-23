@@ -4,6 +4,27 @@
 import { App, MarkdownView, TFile, TFolder, normalizePath, parseYaml, stringifyYaml } from "obsidian";
 import type { ToolDefinition } from "./openai";
 import { appendMemory, loadMemory, listSkills, readSkill } from "./memory";
+import type { UndoManager } from "./undo";
+
+/** Rejects paths that escape the vault or touch Obsidian internals. */
+export class PathError extends Error {}
+
+function safeVaultPath(raw: unknown): string {
+  const p = String(raw ?? "").trim();
+  if (!p) throw new PathError("Path is empty");
+  if (p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p)) {
+    throw new PathError(`Absolute paths are not allowed: ${p}`);
+  }
+  const norm = normalizePath(p);
+  const segs = norm.split("/");
+  if (segs.some((s) => s === "..")) {
+    throw new PathError(`Path traversal is not allowed: ${p}`);
+  }
+  if (segs[0] === ".obsidian") {
+    throw new PathError("Refusing to access the .obsidian config folder");
+  }
+  return norm;
+}
 
 // ---------- YAML frontmatter helpers ----------
 const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
@@ -153,7 +174,8 @@ function getCommandsApi(app: App): CommandsApi | undefined {
 /** Build the full Obsidian-API toolset for the current app instance. */
 export function buildObsidianTools(
   app: App,
-  getTruncate: () => TruncateConfig = () => DEFAULT_TRUNCATE
+  getTruncate: () => TruncateConfig = () => DEFAULT_TRUNCATE,
+  undo?: UndoManager
 ): Tool[] {
   const vault = app.vault;
 
@@ -161,9 +183,14 @@ export function buildObsidianTools(
   const err = (message: string) => ({ ok: false, error: message });
 
   const mustGetFile = (path: string): TFile => {
-    const f = vault.getAbstractFileByPath(normalizePath(path));
-    if (!(f instanceof TFile)) throw new Error(`File not found: ${path}`);
+    const p = safeVaultPath(path);
+    const f = vault.getAbstractFileByPath(p);
+    if (!(f instanceof TFile)) throw new Error(`File not found: ${p}`);
     return f;
+  };
+
+  const snapshot = (record: { tool: string; path: string; before: string | null; after: string | null; newPath?: string }) => {
+    undo?.push(record);
   };
 
   const tools: Tool[] = [
@@ -252,13 +279,14 @@ export function buildObsidianTools(
       ["path", "content"],
       async ({ path, content }) => {
         try {
-          const p = normalizePath(String(path));
+          const p = safeVaultPath(path);
           if (vault.getAbstractFileByPath(p)) return err(`Already exists: ${p}`);
           const folder = p.split("/").slice(0, -1).join("/");
           if (folder && !vault.getAbstractFileByPath(folder)) {
             await vault.createFolder(folder);
           }
           await vault.create(p, String(content));
+          snapshot({ tool: "create_note", path: p, before: null, after: String(content) });
           return ok(`Created ${p}`);
         } catch (e) { return err((e as Error).message); }
       }
@@ -275,7 +303,9 @@ export function buildObsidianTools(
       async ({ path, content }) => {
         try {
           const f = mustGetFile(String(path));
+          const before = await vault.read(f);
           await vault.append(f, String(content));
+          snapshot({ tool: "append_to_note", path: f.path, before, after: before + String(content) });
           return ok(`Appended to ${f.path}`);
         } catch (e) { return err((e as Error).message); }
       }
@@ -292,7 +322,9 @@ export function buildObsidianTools(
       async ({ path, content }) => {
         try {
           const f = mustGetFile(String(path));
+          const before = await vault.read(f);
           await vault.modify(f, String(content));
+          snapshot({ tool: "overwrite_note", path: f.path, before, after: String(content) });
           return ok(`Overwrote ${f.path}`);
         } catch (e) { return err((e as Error).message); }
       }
@@ -306,7 +338,9 @@ export function buildObsidianTools(
       async ({ path }) => {
         try {
           const f = mustGetFile(String(path));
+          const before = await vault.read(f);
           await app.fileManager.trashFile(f);
+          snapshot({ tool: "delete_file", path: f.path, before, after: null });
           return ok(`Deleted ${f.path}`);
         } catch (e) { return err((e as Error).message); }
       }
@@ -323,8 +357,11 @@ export function buildObsidianTools(
       async ({ path, new_path }) => {
         try {
           const f = mustGetFile(String(path));
-          await vault.rename(f, normalizePath(String(new_path)));
-          return ok(`Moved to ${new_path}`);
+          const orig = f.path;
+          const dest = safeVaultPath(new_path);
+          await vault.rename(f, dest);
+          snapshot({ tool: "rename_file", path: orig, before: null, after: null, newPath: dest });
+          return ok(`Moved to ${dest}`);
         } catch (e) { return err((e as Error).message); }
       }
     ),
@@ -439,7 +476,9 @@ export function buildObsidianTools(
       ["section", "entry"],
       async ({ section, entry }) => {
         try {
+          const before = await loadMemory(app);
           await appendMemory(app, String(section), String(entry));
+          snapshot({ tool: "update_memory", path: "AGENT/memory.md", before, after: await loadMemory(app) });
           return ok("Memory updated");
         } catch (e) { return err((e as Error).message); }
       }
@@ -514,12 +553,12 @@ export function buildObsidianTools(
 
     tool(
       "find_replace_in_note",
-      "Find and replace text inside a note without rewriting the whole file. Exact substring match; set all=true to replace every occurrence.",
+      "Find and replace text inside a note without rewriting the whole file. Exact substring match; set all=true to replace every occurrence. Without all=true the match must be unique — include more surrounding context in 'find' if it is not.",
       {
         path: str("Vault-relative path"),
-        find: str("Exact text to find"),
+        find: str("Exact text to find. Must be unique unless all=true; include surrounding lines to disambiguate."),
         replace: str("Replacement text"),
-        all: { type: "boolean", description: "Replace all occurrences (default false = first only)" },
+        all: { type: "boolean", description: "Replace all occurrences (default false = requires a unique match)" },
       },
       ["path", "find", "replace"],
       async ({ path, find, replace, all }) => {
@@ -527,13 +566,18 @@ export function buildObsidianTools(
           const f = mustGetFile(String(path));
           const content = await vault.read(f);
           const needle = String(find);
-          if (!content.includes(needle)) return err("Text not found in note");
+          if (needle.length === 0) return err("find must be non-empty");
+          const count = content.split(needle).length - 1;
+          if (count === 0) return err("Text not found in note");
+          if (!all && count > 1) {
+            return err(`AmbiguousEditError: '${needle.slice(0, 60)}' matches ${count} times; set all=true to replace all, or include more surrounding context in 'find' to make it unique.`);
+          }
           const replaced = all
             ? content.split(needle).join(String(replace))
             : content.replace(needle, String(replace));
           await vault.modify(f, replaced);
-          const count = all ? content.split(needle).length - 1 : 1;
-          return ok(`Replaced ${count} occurrence(s) in ${f.path}`);
+          snapshot({ tool: "find_replace_in_note", path: f.path, before: content, after: replaced });
+          return ok(`Replaced ${all ? count : 1} occurrence(s) in ${f.path}`);
         } catch (e) { return err((e as Error).message); }
       }
     ),
@@ -565,9 +609,12 @@ export function buildObsidianTools(
       async ({ path, key, value }) => {
         try {
           const f = mustGetFile(String(path));
-          const { data, body } = splitFrontmatter(await vault.read(f));
+          const raw = await vault.read(f);
+          const { data, body } = splitFrontmatter(raw);
           data[String(key)] = coerceYamlValue(value);
-          await vault.modify(f, joinFrontmatter(data, body));
+          const after = joinFrontmatter(data, body);
+          await vault.modify(f, after);
+          snapshot({ tool: "set_frontmatter_key", path: f.path, before: raw, after });
           return ok(`Set ${key} in ${f.path}`);
         } catch (e) { return err((e as Error).message); }
       }
@@ -588,9 +635,12 @@ export function buildObsidianTools(
           if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
             return err("properties must be a JSON object");
           }
-          const { data, body } = splitFrontmatter(await vault.read(f));
+          const raw = await vault.read(f);
+          const { data, body } = splitFrontmatter(raw);
           Object.assign(data, parsed as Record<string, unknown>);
-          await vault.modify(f, joinFrontmatter(data, body));
+          const after = joinFrontmatter(data, body);
+          await vault.modify(f, after);
+          snapshot({ tool: "update_frontmatter", path: f.path, before: raw, after });
           return ok(`Updated frontmatter in ${f.path}: ${Object.keys(parsed as object).join(", ")}`);
         } catch (e) { return err((e as Error).message); }
       }
@@ -609,13 +659,18 @@ export function buildObsidianTools(
           const f = mustGetFile(String(path));
           const parsed = coerceYamlValue(keys);
           if (!Array.isArray(parsed)) return err("keys must be a JSON array of strings");
-          const { data, hasBlock, body } = splitFrontmatter(await vault.read(f));
+          const raw = await vault.read(f);
+          const { data, hasBlock, body } = splitFrontmatter(raw);
           if (!hasBlock) return err("Note has no frontmatter");
           const removed: string[] = [];
           for (const k of parsed) {
             if (String(k) in data) { delete data[String(k)]; removed.push(String(k)); }
           }
-          await vault.modify(f, joinFrontmatter(data, body));
+          if (removed.length > 0) {
+            const after = joinFrontmatter(data, body);
+            await vault.modify(f, after);
+            snapshot({ tool: "delete_frontmatter_keys", path: f.path, before: raw, after });
+          }
           return ok(removed.length ? `Deleted keys: ${removed.join(", ")}` : "No matching keys found");
         } catch (e) { return err((e as Error).message); }
       }
@@ -632,14 +687,17 @@ export function buildObsidianTools(
       async ({ path, properties }) => {
         try {
           const f = mustGetFile(String(path));
-          const raw = String(properties);
+          const rawArgs = String(properties);
           let parsed: unknown;
-          try { parsed = JSON.parse(raw); } catch { parsed = parseYaml(raw); }
+          try { parsed = JSON.parse(rawArgs); } catch { parsed = parseYaml(rawArgs); }
           if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
             return err("properties must be a JSON object or YAML mapping");
           }
-          const { body } = splitFrontmatter(await vault.read(f));
-          await vault.modify(f, joinFrontmatter(parsed as Record<string, unknown>, body));
+          const raw = await vault.read(f);
+          const { body } = splitFrontmatter(raw);
+          const after = joinFrontmatter(parsed as Record<string, unknown>, body);
+          await vault.modify(f, after);
+          snapshot({ tool: "replace_frontmatter", path: f.path, before: raw, after });
           return ok(`Replaced frontmatter in ${f.path}`);
         } catch (e) { return err((e as Error).message); }
       }

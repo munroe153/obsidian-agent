@@ -6,6 +6,7 @@ import { chatCompletion, ChatMessage } from "./openai";
 import { buildObsidianTools, Tool } from "./tools";
 import { ensureAgentWorkspace, loadMemory, listSkills } from "./memory";
 import type { ConsentManager } from "./consent";
+import type { UndoManager } from "./undo";
 import type { AgentSettings } from "./settings";
 
 export interface AgentEvent {
@@ -15,6 +16,19 @@ export interface AgentEvent {
 }
 
 export type AgentEventHandler = (e: AgentEvent) => void;
+
+const TOOL_TIMEOUT_MS = 30_000;
+
+/** Race a tool execution against a hard timeout (openagent-style). */
+function runWithTimeout<T>(p: Promise<T>, ms: number, name: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`ToolTimeout: '${name}' exceeded ${ms / 1000}s`)), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
+}
 
 const BASE_PROMPT = `You are an AI agent embedded in Obsidian. You can act on the user's vault through the provided tools (read/create/edit/search notes, metadata, backlinks, workspace commands, direct editor text interaction, YAML frontmatter operations).
 
@@ -45,16 +59,23 @@ ${skillLines}
 export class ObsidianAgent {
   private tools: Tool[];
   private toolMap: Map<string, Tool>;
+  private cancelled = false;
+
+  /** Request cancellation; the loop stops at the next safe point. */
+  cancel(): void {
+    this.cancelled = true;
+  }
 
   constructor(
     private app: App,
     private settings: AgentSettings,
-    private consent?: ConsentManager
+    private consent?: ConsentManager,
+    undo?: UndoManager
   ) {
     this.tools = buildObsidianTools(app, () => ({
       enabled: this.settings.truncateEnabled !== false,
       maxLines: this.settings.truncateMaxLines > 0 ? this.settings.truncateMaxLines : 200,
-    }));
+    }), undo);
     this.toolMap = new Map(this.tools.map((t) => [t.definition.function.name, t]));
   }
 
@@ -76,8 +97,20 @@ export class ObsidianAgent {
     // Unlimited mode (超限模式): no cap — loop until the model stops calling tools.
     const unlimited = this.settings.unlimitedIterations === true;
     const maxIterations = unlimited ? Infinity : this.settings.maxIterations ?? 10;
+    this.cancelled = false;
+
+    const stopIfCancelled = (): ChatMessage[] | null => {
+      if (!this.cancelled) return null;
+      const stopMsg: ChatMessage = { role: "assistant", content: "Stopped by user." };
+      messages.push(stopMsg);
+      onEvent({ type: "assistant", content: stopMsg.content! });
+      return messages.slice(1);
+    };
 
     for (let i = 0; i < maxIterations; i++) {
+      const stopped = stopIfCancelled();
+      if (stopped) return stopped;
+
       const result = await chatCompletion({
         baseUrl: this.settings.baseUrl,
         apiKey: this.settings.apiKey,
@@ -100,6 +133,9 @@ export class ObsidianAgent {
 
       // Execute requested tool calls.
       for (const call of msg.tool_calls) {
+        const stoppedInner = stopIfCancelled();
+        if (stoppedInner) return stoppedInner;
+
         const name = call.function.name;
         let args: Record<string, unknown> = {};
         let parseError: string | null = null;
@@ -122,7 +158,7 @@ export class ObsidianAgent {
           output = { ok: false, error: "ConsentDenied: the user rejected this action. Do not retry it; ask the user how to proceed." };
         } else {
           try {
-            output = await tool.execute(args);
+            output = await runWithTimeout(tool.execute(args), TOOL_TIMEOUT_MS, name);
           } catch (e) {
             output = { ok: false, error: (e as Error).message };
           }

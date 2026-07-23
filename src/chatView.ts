@@ -26,7 +26,7 @@ export class AgentChatView extends ItemView {
 
   constructor(leaf: WorkspaceLeaf, private plugin: AgentPlugin) {
     super(leaf);
-    this.agent = new ObsidianAgent(this.app, plugin.settings, plugin.consent);
+    this.agent = new ObsidianAgent(this.app, plugin.settings, plugin.consent, plugin.undo);
   }
 
   getViewType(): string { return VIEW_TYPE_AGENT_CHAT; }
@@ -62,7 +62,15 @@ export class AgentChatView extends ItemView {
     this.suggestEl = inputRow.createDiv({ cls: "agent-suggest" });
     this.suggestEl.style.display = "none";
 
-    this.sendBtn.addEventListener("click", () => { void this.send(); });
+    this.sendBtn.addEventListener("click", () => {
+      if (this.busy) {
+        // While running, the send button acts as a stop button.
+        this.agent.cancel();
+        new Notice("Agent: stopping…");
+      } else {
+        void this.send();
+      }
+    });
     this.inputEl.addEventListener("input", () => { this.updateSuggestions(); });
     this.inputEl.addEventListener("keydown", (e) => {
       if (this.suggestFiles.length > 0) {
@@ -215,14 +223,16 @@ export class AgentChatView extends ItemView {
     }
 
     this.busy = true;
-    this.sendBtn.disabled = true;
+    this.sendBtn.disabled = false;
+    setIcon(this.sendBtn, "square"); // stop icon while running
+    this.sendBtn.setAttr("aria-label", "Stop the agent");
     this.inputEl.value = "";
     this.closeSuggestions();
     this.addBubble("agent-msg-user", text);
     const payload = await this.buildPayload(text);
 
     // Refresh agent in case settings changed.
-    this.agent = new ObsidianAgent(this.app, this.plugin.settings, this.plugin.consent);
+    this.agent = new ObsidianAgent(this.app, this.plugin.settings, this.plugin.consent, this.plugin.undo);
 
     const thinking = this.addBubble("agent-msg-assistant", "…");
 
@@ -246,6 +256,8 @@ export class AgentChatView extends ItemView {
       new Notice(`Agent error: ${(e as Error).message}`);
     } finally {
       this.busy = false;
+      setIcon(this.sendBtn, "send");
+      this.sendBtn.setAttr("aria-label", "Send");
       this.sendBtn.disabled = false;
     }
   }

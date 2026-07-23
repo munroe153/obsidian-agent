@@ -3,6 +3,7 @@ import { AgentSettings, AgentSettingTab, DEFAULT_SETTINGS } from "./settings";
 import { AgentChatView, VIEW_TYPE_AGENT_CHAT } from "./chatView";
 import { ensureAgentWorkspace } from "./memory";
 import { ConsentManager } from "./consent";
+import { UndoManager } from "./undo";
 
 interface SplitNode {
   parent?: SplitNode;
@@ -12,10 +13,12 @@ interface SplitNode {
 export default class AgentPlugin extends Plugin {
   settings!: AgentSettings;
   consent!: ConsentManager;
+  undo!: UndoManager;
 
   async onload(): Promise<void> {
     await this.loadSettings();
     this.consent = new ConsentManager(this.app, () => this.settings.requireConsent);
+    this.undo = new UndoManager();
 
     // Bootstrap the AGENT/ workspace (memory.md + skills/) in the vault root.
     this.app.workspace.onLayoutReady(() => {
@@ -44,6 +47,12 @@ export default class AgentPlugin extends Plugin {
       id: "open-chat-tab",
       name: "Open chat in a new tab",
       callback: () => { void this.activateView("tab"); },
+    });
+
+    this.addCommand({
+      id: "undo-last-change",
+      name: "Undo last agent change",
+      callback: () => { void this.undo.undoLastWithNotice(this.app); },
     });
 
     this.addSettingTab(new AgentSettingTab(this.app, this));
