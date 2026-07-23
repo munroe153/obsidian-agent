@@ -1,8 +1,8 @@
 {
   "id": "agent",
   "name": "Agent",
-  "version": "1.0.0",
-  "minAppVersion": "1.4.0",
+  "version": "1.0.1",
+  "minAppVersion": "1.8.0",
   "description": "Chat with an AI agent that reads and edits your notes through 27 built-in tools. Works with any OpenAI-compatible provider (DeepSeek, Moonshot, Ollama, LM Studio), with long-term memory and skills, on both desktop and mobile.",
   "author": "munroe153",
   "isDesktopOnly": false

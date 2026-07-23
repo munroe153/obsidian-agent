@@ -1,7 +1,7 @@
 {
   "name": "obsidian-agent",
-  "version": "1.0.0",
-  "description": "The Agent plugin supports both Obsidian mobile and desktop, delivering a consistent and fluid Agent experience across platforms. By wrapping the Obsidian API into tools and writing the Agent layer in pure JavaScript, it completely eliminates the Agent's dependency on desktop terminals. We use a universal OpenAI-compatible interface, so you can choose any provider and model you prefer. It currently supports long-term memory and skill management, helping you build workflows across all platforms. The Agent plugin is free forever—use it with confidence.",
+  "version": "1.0.1",
+  "description": "Agent plugin: 27 LLM tools over the vault API, OpenAI-compatible, desktop and mobile.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
