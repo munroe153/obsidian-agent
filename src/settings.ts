@@ -8,6 +8,7 @@ export interface AgentSettings {
   maxIterations: number;
   unlimitedIterations: boolean;
   openMode: "sidebar" | "tab";
+  requireConsent: boolean;
 }
 
 export const DEFAULT_SETTINGS: AgentSettings = {
@@ -17,6 +18,7 @@ export const DEFAULT_SETTINGS: AgentSettings = {
   maxIterations: 10,
   unlimitedIterations: false,
   openMode: "sidebar",
+  requireConsent: true,
 };
 
 export class AgentSettingTab extends PluginSettingTab {
@@ -99,5 +101,15 @@ export class AgentSettingTab extends PluginSettingTab {
         })
       );
     sliderSetting.setDisabled(this.plugin.settings.unlimitedIterations);
+
+    new Setting(containerEl)
+      .setName("Require confirmation")
+      .setDesc("Ask for approval before any tool that modifies the vault or runs commands (delete, overwrite, edit, frontmatter, commands). Recommended.")
+      .addToggle((tg) =>
+        tg.setValue(this.plugin.settings.requireConsent).onChange(async (v) => {
+          this.plugin.settings.requireConsent = v;
+          await this.plugin.saveSettings();
+        })
+      );
   }
 }

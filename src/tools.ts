@@ -63,7 +63,28 @@ function truncateForModel(content: string, offset = 0, limit = MAX_CONTENT_CHARS
 export interface Tool {
   definition: ToolDefinition;
   execute: (args: Record<string, unknown>) => Promise<unknown>;
+  /** True for tools that modify the vault / workspace or run commands.
+   * The consent layer asks the user before these execute. */
+  mutates?: boolean;
 }
+
+/** Tools that change state and therefore require user consent. */
+const MUTATING_TOOLS = new Set([
+  "create_note",
+  "append_to_note",
+  "overwrite_note",
+  "delete_file",
+  "rename_file",
+  "run_command",
+  "update_memory",
+  "replace_active_selection",
+  "insert_at_cursor",
+  "find_replace_in_note",
+  "set_frontmatter_key",
+  "update_frontmatter",
+  "delete_frontmatter_keys",
+  "replace_frontmatter",
+]);
 
 type JsonSchema = Record<string, unknown>;
 
@@ -116,7 +137,7 @@ export function buildObsidianTools(app: App): Tool[] {
     return f;
   };
 
-  return [
+  const tools: Tool[] = [
     // ---------- Vault read ----------
     tool(
       "read_note",
@@ -595,4 +616,9 @@ export function buildObsidianTools(app: App): Tool[] {
       }
     ),
   ];
+
+  for (const t of tools) {
+    if (MUTATING_TOOLS.has(t.definition.function.name)) t.mutates = true;
+  }
+  return tools;
 }

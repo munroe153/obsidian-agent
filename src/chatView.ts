@@ -16,7 +16,7 @@ export class AgentChatView extends ItemView {
 
   constructor(leaf: WorkspaceLeaf, private plugin: AgentPlugin) {
     super(leaf);
-    this.agent = new ObsidianAgent(this.app, plugin.settings);
+    this.agent = new ObsidianAgent(this.app, plugin.settings, plugin.consent);
   }
 
   getViewType(): string { return VIEW_TYPE_AGENT_CHAT; }
@@ -102,7 +102,7 @@ export class AgentChatView extends ItemView {
     this.addBubble("agent-msg-user", text);
 
     // Refresh agent in case settings changed.
-    this.agent = new ObsidianAgent(this.app, this.plugin.settings);
+    this.agent = new ObsidianAgent(this.app, this.plugin.settings, this.plugin.consent);
 
     const thinking = this.addBubble("agent-msg-assistant", "…");
 

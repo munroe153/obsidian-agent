@@ -2,6 +2,7 @@ import { Notice, Plugin, WorkspaceLeaf } from "obsidian";
 import { AgentSettings, AgentSettingTab, DEFAULT_SETTINGS } from "./settings";
 import { AgentChatView, VIEW_TYPE_AGENT_CHAT } from "./chatView";
 import { ensureAgentWorkspace } from "./memory";
+import { ConsentManager } from "./consent";
 
 interface SplitNode {
   parent?: SplitNode;
@@ -10,9 +11,11 @@ interface SplitNode {
 
 export default class AgentPlugin extends Plugin {
   settings!: AgentSettings;
+  consent!: ConsentManager;
 
   async onload(): Promise<void> {
     await this.loadSettings();
+    this.consent = new ConsentManager(this.app, () => this.settings.requireConsent);
 
     // Bootstrap the AGENT/ workspace (memory.md + skills/) in the vault root.
     this.app.workspace.onLayoutReady(() => {

@@ -5,6 +5,7 @@ import { App } from "obsidian";
 import { chatCompletion, ChatMessage } from "./openai";
 import { buildObsidianTools, Tool } from "./tools";
 import { ensureAgentWorkspace, loadMemory, listSkills } from "./memory";
+import type { ConsentManager } from "./consent";
 import type { AgentSettings } from "./settings";
 
 export interface AgentEvent {
@@ -45,7 +46,11 @@ export class ObsidianAgent {
   private tools: Tool[];
   private toolMap: Map<string, Tool>;
 
-  constructor(private app: App, private settings: AgentSettings) {
+  constructor(
+    private app: App,
+    private settings: AgentSettings,
+    private consent?: ConsentManager
+  ) {
     this.tools = buildObsidianTools(app);
     this.toolMap = new Map(this.tools.map((t) => [t.definition.function.name, t]));
   }
@@ -94,18 +99,24 @@ export class ObsidianAgent {
       for (const call of msg.tool_calls) {
         const name = call.function.name;
         let args: Record<string, unknown> = {};
+        let parseError: string | null = null;
         try {
           args = call.function.arguments ? JSON.parse(call.function.arguments) : {};
-        } catch {
-          args = {};
+        } catch (e) {
+          parseError = (e as Error).message;
         }
 
         onEvent({ type: "tool_call", name, content: JSON.stringify(args) });
 
         const tool = this.toolMap.get(name);
         let output: unknown;
-        if (!tool) {
+        if (parseError) {
+          // Feed the failure back so the model can retry with valid JSON.
+          output = { ok: false, error: `Invalid JSON arguments: ${parseError}` };
+        } else if (!tool) {
           output = { ok: false, error: `Unknown tool: ${name}` };
+        } else if (tool.mutates && this.consent && !(await this.consent.confirm(tool, args))) {
+          output = { ok: false, error: "ConsentDenied: the user rejected this action. Do not retry it; ask the user how to proceed." };
         } else {
           try {
             output = await tool.execute(args);
