@@ -3,6 +3,11 @@ import { AgentSettings, AgentSettingTab, DEFAULT_SETTINGS } from "./settings";
 import { AgentChatView, VIEW_TYPE_AGENT_CHAT } from "./chatView";
 import { ensureAgentWorkspace } from "./memory";
 
+interface SplitNode {
+  parent?: SplitNode;
+  children?: SplitNode[];
+}
+
 export default class AgentPlugin extends Plugin {
   settings!: AgentSettings;
 
@@ -27,22 +32,18 @@ export default class AgentPlugin extends Plugin {
     });
 
     this.addCommand({
-      id: "open-agent-chat-sidebar",
-      name: "Open agent chat in sidebar",
+      id: "open-chat-sidebar",
+      name: "Open chat in sidebar",
       callback: () => { void this.activateView("sidebar"); },
     });
 
     this.addCommand({
-      id: "open-agent-chat-tab",
-      name: "Open agent chat in a new tab",
+      id: "open-chat-tab",
+      name: "Open chat in a new tab",
       callback: () => { void this.activateView("tab"); },
     });
 
     this.addSettingTab(new AgentSettingTab(this.app, this));
-  }
-
-  async onunload(): Promise<void> {
-    this.app.workspace.detachLeavesOfType(VIEW_TYPE_AGENT_CHAT);
   }
 
   async activateView(mode: "sidebar" | "tab" = "sidebar"): Promise<void> {
@@ -68,13 +69,11 @@ export default class AgentPlugin extends Plugin {
 
   /** Whether the leaf sits in the root (main tab area) vs. a side dock. */
   private isLeafInArea(leaf: WorkspaceLeaf, mode: "sidebar" | "tab"): boolean {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const root: any = (this.app.workspace as any).rootSplit;
-    let node: unknown = leaf;
+    const root = (this.app.workspace as unknown as { rootSplit?: SplitNode }).rootSplit;
+    let node = leaf as unknown as SplitNode;
     // Walk up the split-tree parents until we hit a root-level child.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    while ((node as any)?.parent) node = (node as any).parent;
-    const inRoot = root ? (root as { children?: unknown[] }).children?.includes(node) ?? false : true;
+    while (node.parent) node = node.parent;
+    const inRoot = root?.children?.includes(node) ?? true;
     return mode === "tab" ? inRoot : !inRoot;
   }
 
